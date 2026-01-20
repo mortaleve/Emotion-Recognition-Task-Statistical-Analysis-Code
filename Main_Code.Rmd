@@ -1,0 +1,518 @@
+---
+title: "Analisis para Github"
+author: "Lsilva"
+date: "2026-01-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Todas las librerías necesarias
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lme4)
+library(emmeans)
+library(ggplot2)
+library(boot)
+```
+
+
+```{r}
+# ============================================================
+#### 1.1 Preparación de base experimental
+# ============================================================
+trials_master <- trials_master %>%
+  mutate(
+    participant = as.character(participant),
+    grupo = factor(grupo),
+    emocion_objetivo = factor(emocion_objetivo),
+    correct = as.integer(correct),
+    reaction_time = as.numeric(reaction_time)
+  )
+
+# 1.2 Preparación de base PANAS
+pa_items <- c("interesado","dispuesto","animado","energico","orgulloso",
+              "inspirado","decidido","atento","activo","entusiasmado")
+
+na_items <- c("irritado","tenso","avergonzado","temeroso","nervioso",
+              "intranquilo","asustado","enojado","culpable","disgustado/enfadado")
+
+panas_clean <- panas_master %>%
+  mutate(
+    participant = as.character(participant),
+    panas_emocion = tolower(str_trim(as.character(panas_emocion))),
+    panas_respuesta = as.numeric(panas_respuesta)
+  )
+
+# 1.3 Cálculo de puntajes PANAS y consolidación de variables de sujeto
+panas_wide <- panas_clean %>%
+  group_by(participant) %>%
+  summarise(
+    PA_total = sum(panas_respuesta[panas_emocion %in% pa_items], na.rm = TRUE),
+    NA_total = sum(panas_respuesta[panas_emocion %in% na_items], na.rm = TRUE),
+    grupo    = if ("grupo" %in% names(panas_clean)) first(grupo) else NA_character_,
+    Edad     = if ("Edad" %in% names(panas_clean)) first(Edad) else NA_real_,
+    Genero   = if ("Genero" %in% names(panas_clean)) first(Genero) else NA_character_,
+    n_items  = sum(!is.na(panas_respuesta)),
+    .groups  = "drop"
+  )
+```
+
+```{r}
+# ============================================================
+#1.0 Calculo de psicométrica de la escala PANAS
+# ============================================================
+# 1) Matriz participante x ítem (wide por ítems)
+panas_items_wide <- panas_clean %>%
+  select(participant, panas_emocion, panas_respuesta) %>%
+  distinct() %>%  # por si hubiera duplicados accidentales
+  pivot_wider(names_from = panas_emocion, values_from = panas_respuesta)
+
+# 2) Subescalas PA y NA (usa tus vectores pa_items / na_items)
+pa_mat <- panas_items_wide %>%
+  select(any_of(pa_items)) %>%
+  as.data.frame()
+
+na_mat <- panas_items_wide %>%
+  select(any_of(na_items)) %>%
+  as.data.frame()
+
+# 3) Alfa
+alpha_pa <- psych::alpha(pa_mat, check.keys = FALSE)
+alpha_na <- psych::alpha(na_mat, check.keys = FALSE)
+
+alpha_pa$total$raw_alpha
+alpha_na$total$raw_alpha
+```
+```{r}
+# ============================================================
+# Asociación entre estado afectivo (PANAS) y desempeño en la tarea
+# (Spearman: PA_total / NA_total vs Exactitud media / RT medio)
+# ============================================================
+
+
+# 1) Resúmenes por participante (RT solo en ensayos correctos)
+perf_part <- trials_mixed %>%
+  mutate(
+    participant   = as.character(participant),
+    correct       = as.integer(correct),
+    reaction_time = as.numeric(reaction_time)
+  ) %>%
+  group_by(participant) %>%
+  summarise(
+    acc_mean = mean(correct, na.rm = TRUE),
+    rt_mean  = mean(reaction_time[correct == 1 & is.finite(reaction_time) & reaction_time > 0],
+                    na.rm = TRUE),
+    .groups  = "drop"
+  )
+
+# 2) Unir con puntajes PANAS por participante
+corr_df <- perf_part %>%
+  left_join(
+    panas_wide %>%
+      transmute(
+        participant = as.character(participant),
+        PA_total = as.numeric(PA_total),
+        NA_total = as.numeric(NA_total)
+      ),
+    by = "participant"
+  )
+
+# 3) Función auxiliar para Spearman (reporta rho y p)
+spearman_row <- function(data, x, y) {
+  tmp <- data %>%
+    select(all_of(c(x, y))) %>%
+    filter(is.finite(.data[[x]]), is.finite(.data[[y]]))
+
+  if (nrow(tmp) < 5) {
+    return(tibble(rho = NA_real_, p = NA_real_, n = nrow(tmp)))
+  }
+
+  ct <- suppressWarnings(cor.test(tmp[[x]], tmp[[y]], method = "spearman", exact = FALSE))
+  tibble(rho = unname(ct$estimate), p = ct$p.value, n = nrow(tmp))
+}
+
+# 4) Tabla final 
+tabla_spearman <- bind_rows(
+  tibble(Variable_X = "Afecto Positivo (PA)", Variable_Y = "Exactitud media") %>%
+    bind_cols(spearman_row(corr_df, "PA_total", "acc_mean")),
+  tibble(Variable_X = "Afecto Positivo (PA)", Variable_Y = "Tiempo de reacción medio") %>%
+    bind_cols(spearman_row(corr_df, "PA_total", "rt_mean")),
+  tibble(Variable_X = "Afecto Negativo (NA)", Variable_Y = "Exactitud media") %>%
+    bind_cols(spearman_row(corr_df, "NA_total", "acc_mean")),
+  tibble(Variable_X = "Afecto Negativo (NA)", Variable_Y = "Tiempo de reacción medio") %>%
+    bind_cols(spearman_row(corr_df, "NA_total", "rt_mean"))
+) %>%
+  mutate(
+    rho = round(rho, 2),
+    p   = ifelse(is.na(p), NA_character_,
+                 ifelse(p < .001, "< .001", sub("^0", "", sprintf("%.3f", p))))
+  ) %>%
+  select(Variable_X, Variable_Y, rho, p)
+
+tabla_spearman
+
+```
+
+
+
+
+```{r}
+# 1.4 Unión final de bases y formateo de factores
+trials_mixed <- trials_master %>%
+  left_join(
+    panas_wide %>% select(participant, PA_total, NA_total, Edad, Genero, grupo),
+    by = "participant",
+    suffix = c("", "_panas")
+  ) %>%
+  mutate(
+    participant = factor(participant),
+    correct     = as.integer(correct),
+    Edad        = as.numeric(Edad),
+    PA_total    = as.numeric(PA_total),
+    NA_total    = as.numeric(NA_total),
+    Genero      = factor(Genero),
+
+    # 1) Crear auxiliar sin pisar nombres
+    grupo_raw = dplyr::coalesce(as.character(.data$grupo), as.character(.data$grupo_panas)),
+    grupo     = factor(grupo_raw, levels = c("primero", "cuarto")),
+
+    # 2) Asegurar emoción consistente
+    emocion_objetivo = factor(tolower(emocion_objetivo),
+                              levels = c("alegria", "disgusto", "enojado", "miedo", "tristeza"))
+  ) %>%
+  select(-grupo_raw, -grupo_panas)
+```
+
+
+
+
+```{r}
+# ============================================================
+#### 1.2 Grafico comparacion Rt correctas vs incorrectas
+# ============================================================
+
+
+rt_by_acc <- trials_mixed %>%
+  mutate(
+    correct = factor(correct, levels = c(0, 1),
+                     labels = c("Incorrecta", "Correcta")),
+    reaction_time = as.numeric(reaction_time)
+  ) %>%
+  filter(is.finite(reaction_time), reaction_time > 0)
+
+rt_desc_acc <- rt_by_acc %>%
+  group_by(correct) %>%
+  summarise(
+    n = n(),
+    media_rt = mean(reaction_time),
+    sd_rt = sd(reaction_time),
+    mediana_rt = median(reaction_time),
+    iqr_rt = IQR(reaction_time),
+    .groups = "drop"
+  )
+
+rt_desc_acc
+fig_rt_acc <- ggplot(
+  rt_by_acc,
+  aes(x = correct, y = reaction_time, fill = correct)
+) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  coord_cartesian(ylim = quantile(rt_by_acc$reaction_time, c(0, .95))) +
+  labs(
+    x = "Tipo de respuesta",
+    y = "Tiempo de reacción (s)"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+print(fig_rt_acc)
+
+ggsave(
+  "Figura_RT_correcta_vs_incorrecta.png",
+  fig_rt_acc,
+  width = 5,
+  height = 4,
+  dpi = 300,
+  bg = "white"
+)
+```
+
+
+```{r}
+# ============================================================
+####2. Modelado de Exactitud (Efectos Principales)
+# ============================================================
+model_acc <- glmer(
+  correct ~ emocion_objetivo + grupo + Edad + Genero + PA_total + NA_total + (1 | participant),
+  data = trials_mixed,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+summary(model_acc)
+
+# Post-hoc efectos principales
+emm_acc <- emmeans(model_acc, ~ emocion_objetivo, type = "response")
+pairs(emm_acc, adjust = "holm")
+```
+
+
+```{r}
+# ============================================================
+####3. Modelo de Interacción: Emoción × Grupo
+# ============================================================
+# Definición de modelos para comparación
+model_acc_main <- model_acc # Reutilizamos el modelo base
+
+model_acc_int <- glmer(
+  correct ~ emocion_objetivo * grupo + Edad + Genero + PA_total + NA_total + (1 | participant),
+  data = trials_mixed,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+summary(model_acc_int)
+anova(model_acc_main, model_acc_int, test = "Chisq")
+```
+
+
+```{r}
+# ============================================================
+#####4. Post-Hoc: Interacción Emoción × Grupo
+# ============================================================
+# 4.1 Medias marginales estimadas
+emm_emoc_x_grupo <- emmeans(model_acc_int, ~ emocion_objetivo | grupo, type = "response")
+emm_emoc_x_grupo
+
+# 4.2 Comparaciones pareadas (Holm)
+posthoc_emoc_dentro_grupo <- contrast(emm_emoc_x_grupo, method = "pairwise", adjust = "holm")
+summary(posthoc_emoc_dentro_grupo, infer = TRUE, type = "response")
+
+# 4.3 Exportación de tablas
+tab_posthoc <- as.data.frame(summary(posthoc_emoc_dentro_grupo, infer = TRUE, type = "response")) %>%
+  arrange(p.value)
+
+write.csv(tab_posthoc, "posthoc_exactitud_emociones_dentro_grupo_holm.csv", row.names = FALSE)
+```
+
+
+```{r}
+# ============================================================
+####5. Modelo de Interacción: Emoción × Género
+# ============================================================
+# Limpieza de NAs para comparación de modelos de género
+df_gender <- trials_mixed %>%
+  select(correct, emocion_objetivo, grupo, Edad, Genero, PA_total, NA_total, participant) %>%
+  na.omit()
+
+model_acc_base_gender <- glmer(
+  correct ~ emocion_objetivo + grupo + Edad + Genero + PA_total + NA_total + (1 | participant),
+  data = df_gender,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+model_acc_int_gender <- glmer(
+  correct ~ emocion_objetivo * Genero + grupo + Edad + PA_total + NA_total + (1 | participant),
+  data = df_gender,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+summary(model_acc_int_gender)
+anova(model_acc_base_gender, model_acc_int_gender, test = "Chisq")
+
+# P-valores específicos interacción Género
+coef_tab <- summary(model_acc_int_gender)$coefficients
+coef_tab[grep("emocion_objetivo:Genero", rownames(coef_tab)), , drop = FALSE]
+```
+
+
+```{r}
+# ============================================================
+#6.CÁLCULO DE IC BCa Y GRÁFICO DE EXACTITUD
+# ============================================================
+
+
+set.seed(123) # Para que los resultados del bootstrap sean siempre los mismos
+
+# 1) Calcular exactitud promedio por participante y emoción
+acc_part <- trials_mixed %>%
+  group_by(grupo, emocion_objetivo, participant) %>%
+  summarise(acc = mean(correct, na.rm = TRUE), .groups = "drop")
+
+# 2) Función para calcular el IC BCa (Bias-Corrected and Accelerated)
+bca_ci_mean <- function(x, R = 2000, conf = 0.95) {
+  x <- x[is.finite(x)]
+  n <- length(x)
+  
+  if (n < 6) {
+    return(tibble(mean = mean(x), ci_low = NA_real_, ci_high = NA_real_, n = n))
+  }
+  
+  b <- boot(data = x, statistic = function(data, i) mean(data[i]), R = R)
+  ci <- tryCatch(boot.ci(b, conf = conf, type = "bca"), error = function(e) NULL)
+  
+  if (is.null(ci) || is.null(ci$bca)) {
+    return(tibble(mean = mean(x), ci_low = NA_real_, ci_high = NA_real_, n = n))
+  }
+  
+  tibble(mean = mean(x), ci_low = ci$bca[4], ci_high = ci$bca[5], n = n)
+}
+
+# 3) Aplicar Bootstrap a cada celda (Grupo x Emoción)
+acc_desc_bca <- acc_part %>%
+  group_by(grupo, emocion_objetivo) %>%
+  summarise(out = list(bca_ci_mean(acc, R = 2000, conf = 0.95)), .groups = "drop") %>%
+  unnest(out) %>%
+  rename(acc_mean = mean, acc_ci_low = ci_low, acc_ci_high = ci_high)
+
+# 4) Generar el gráfico de Exactitud
+fig_acc_bca <- ggplot(
+  acc_desc_bca, 
+  aes(x = emocion_objetivo, y = acc_mean, group = grupo, linetype = grupo)
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = acc_ci_low, ymax = acc_ci_high), width = 0.10) +
+  scale_linetype_manual(values = c("primero" = "solid", "cuarto" = "dashed")) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) + # Eje Y de 0 a 1
+  labs(
+    x = "Emoción Objetivo",
+    y = "Exactitud Media",
+    linetype = "Grupo"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "top")
+
+print(fig_acc_bca)
+
+# 5) Guardar la imagen
+ggsave("Figura1_exactitud_BCa.png", fig_acc_bca, width = 7, height = 4.5, dpi = 300, bg = "white")
+```
+
+
+-------------------------------------------------------------RT--------------------------------------------------------------------------------------
+
+```{r}
+# ============================================================
+# ANÁLISIS DE TIEMPOS DE REACCIÓN (RT)
+# ============================================================
+
+library(dplyr)
+library(lme4)
+library(car)
+library(emmeans)
+library(ggplot2)
+library(boot)
+
+# 1. Preparación y Filtrado de Datos
+# Solo incluimos ensayos correctos y RTs válidos (> 0)
+rt_data <- trials_mixed %>%
+  mutate(
+    participant = factor(participant),
+    emocion_objetivo = factor(emocion_objetivo),
+    grupo = factor(
+      if ("grupo.y" %in% names(.)) as.character(grupo.y) else as.character(grupo),
+      levels = c("primero","cuarto")
+    ),
+    Genero = factor(Genero),
+    Edad = as.numeric(Edad),
+    reaction_time = as.numeric(reaction_time),
+    log_rt = log(reaction_time)
+  ) %>%
+  filter(correct == 1, is.finite(reaction_time), reaction_time > 0)
+
+# 2. Modelado Estadístico (LMM)
+# 2.1 Modelo de Efectos Principales
+model_rt_main <- lmer(
+  log_rt ~ emocion_objetivo + grupo + Edad + Genero + PA_total + NA_total + (1 | participant),
+  data = rt_data, REML = FALSE
+)
+
+# 2.2 Modelo de Interacción: Emoción × Grupo
+model_rt_int <- lmer(
+  log_rt ~ emocion_objetivo * grupo + Edad + Genero + PA_total + NA_total + (1 | participant),
+  data = rt_data, REML = FALSE
+)
+
+# 2.3 Comparación de Modelos e Inferencia
+anova(model_rt_main, model_rt_int) # ¿Es significativa la interacción?
+Anova(model_rt_int, type = 3)     # Tabla de significancia tipo III
+
+# 3. Diagnóstico del Modelo
+par(mfrow=c(1,2))
+plot(model_rt_int, which = 1, main = "Residuos vs Ajustados")
+qqnorm(resid(model_rt_int)); qqline(resid(model_rt_int))
+par(mfrow=c(1,1))
+
+# 4. Post-Hoc: Comparaciones Pareadas (Back-transformed de log)
+emm_rt <- emmeans(model_rt_int, ~ emocion_objetivo | grupo, type = "response")
+posthoc_rt <- pairs(emm_rt, adjust = "holm")
+summary(posthoc_rt, infer = TRUE)
+
+# 5. Análisis Descriptivo Robusto (Bootstrap BCa)
+set.seed(123)
+
+# 5.1 Función Bootstrap para Media Log re-transformada a Segundos
+bca_ci_rt <- function(x_log, R = 2000, conf = 0.95) {
+  x_log <- x_log[is.finite(x_log)]
+  n <- length(x_log)
+  if (n < 6) return(tibble(rt_mean = exp(mean(x_log)), rt_ci_low = NA, rt_ci_high = NA, n = n))
+  
+  b <- boot(data = x_log, statistic = function(d, i) mean(d[i]), R = R)
+  ci <- tryCatch(boot.ci(b, conf = conf, type = "bca"), error = function(e) NULL)
+  
+  m <- mean(x_log)
+  if (is.null(ci$bca)) return(tibble(rt_mean = exp(m), rt_ci_low = NA, rt_ci_high = NA, n = n))
+  
+  tibble(rt_mean = exp(m), rt_ci_low = exp(ci$bca[4]), rt_ci_high = exp(ci$bca[5]), n = n)
+}
+
+# 5.2 Aplicar Bootstrap por celda
+rt_desc_bca <- rt_data %>%
+  group_by(grupo, emocion_objetivo, participant) %>%
+  summarise(rt_log_p = mean(log_rt), .groups = "drop") %>%
+  group_by(grupo, emocion_objetivo) %>%
+  summarise(out = list(bca_ci_rt(rt_log_p)), .groups = "drop") %>%
+  unnest(out)
+
+# 6. Visualización de Resultados Descriptivos (Figura 2)
+fig2_rt <- ggplot(rt_desc_bca, aes(x = emocion_objetivo, y = rt_mean, group = grupo, linetype = grupo)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = rt_ci_low, ymax = rt_ci_high), width = 0.15) +
+  scale_linetype_manual(values = c("primero" = "dashed", "cuarto" = "solid")) +
+  scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) +
+  labs(x = "Emoción objetivo", y = "Tiempo de reacción medio (s)", linetype = "Grupo") +
+  theme_minimal(base_size = 12)
+
+print(fig2_rt)
+ggsave("Figura2_RT_BCa.png", fig2_rt, width = 7, height = 4.5, dpi = 300, bg = "white")
+
+# 7. Comparación RT: Correctas vs Incorrectas (Exploratorio)(figura)
+rt_by_acc <- trials_mixed %>%
+  filter(is.finite(reaction_time), reaction_time > 0) %>%
+  mutate(correct = factor(correct, labels = c("Incorrecta", "Correcta")))
+
+fig_rt_acc <- ggplot(rt_by_acc, aes(x = correct, y = reaction_time, fill = correct)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  coord_cartesian(ylim = quantile(rt_by_acc$reaction_time, c(0, .95))) +
+  labs(x = "Tipo de respuesta", y = "Tiempo de reacción (s)") +
+  theme_classic() + theme(legend.position = "none")
+
+ggsave("Figura_RT_correcta_vs_incorrecta.png", fig_rt_acc, width = 5, height = 4, dpi = 300)
+```
+```{r}
+summary(model_rt_main)
+```
+
+
+
+
