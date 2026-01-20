@@ -1,108 +1,88 @@
-# Data-analysis-in-emotion-recognition
+Emotion Recognition Task – Data Analysis Code
 
-Este repositorio contiene el código utilizado para el análisis estadístico de un estudio experimental de reconocimiento emocional facial en estudiantes universitarios. Los análisis se realizaron en R y corresponden exactamente a los resultados reportados en el manuscrito asociado.
+This repository contains the complete R code used to process, analyze, and visualize the data reported in the associated manuscript on emotional recognition performance in university students.
 
-Descripción general
-
-El estudio evalúa el desempeño en una tarea de reconocimiento emocional a partir de estímulos visuales dinámicos, considerando dos indicadores principales:
-	•	Exactitud (respuesta correcta vs. incorrecta, a nivel de ensayo).
-	•	Tiempo de reacción (RT), analizado únicamente en ensayos con respuestas correctas.
-
-Asimismo, se examina el rol del grupo académico (primer vs. cuarto año), la emoción objetivo, y variables de control a nivel individual (edad, género y estado afectivo medido mediante PANAS).
-
-El repositorio incluye:
-	•	Preparación y limpieza de datos experimentales y psicométricos.
-	•	Análisis descriptivos con intervalos de confianza bootstrap BCa.
-	•	Modelos mixtos a nivel de ensayo para exactitud y tiempo de reacción.
-	•	Comparaciones post hoc basadas en medias marginales estimadas.
-	•	Generación de tablas y figuras utilizadas en el artículo.
+The analyses focus on accuracy and reaction time in a dynamic facial emotion recognition task, using mixed-effects modeling and robust descriptive procedures.
 
 ⸻
 
-Estructura del repositorio
-	•	DataAnalisys.Rmd
-Documento principal que contiene todo el flujo de análisis, desde la preparación de datos hasta los modelos finales reportados en el paper.
-	•	trials_master
-Base de datos experimental a nivel de ensayo (exactitud y tiempo de reacción).
-	•	panas_master
-Respuestas individuales al cuestionario PANAS en formato largo.
-	•	Figuras exportadas (.png)
-Gráficos descriptivos y de probabilidades predichas reportados en el manuscrito.
+Overview
+
+The analytical workflow includes:
+	•	Data preparation and merging of experimental task data with PANAS questionnaire scores
+	•	Psychometric analysis of the PANAS scale (Cronbach’s alpha)
+	•	Descriptive analyses of accuracy and reaction time by emotion and academic group
+	•	Mixed-effects logistic regression models for accuracy at the trial level
+	•	Linear mixed-effects models for log-transformed reaction time
+	•	Post hoc comparisons based on estimated marginal means
+	•	Visualization of predicted probabilities and reaction times with BCa bootstrap confidence intervals
+
+All analyses were conducted in R following reproducible research principles.
 
 ⸻
 
-Preparación de los datos
-	1.	Base experimental
-	•	Conversión de variables a sus tipos adecuados (factores, numéricos).
-	•	Codificación binaria de la exactitud.
-	•	Filtrado de tiempos de reacción inválidos.
-	2.	PANAS
-	•	Limpieza y estandarización de etiquetas de ítems.
-	•	Cálculo de puntajes compuestos de Afecto Positivo (PA) y Afecto Negativo (NA).
-	•	Verificación de respuestas completas (20 ítems por participante).
-	•	Estimación de la consistencia interna mediante alfa de Cronbach.
-	3.	Integración de bases
-	•	Unión de datos experimentales y psicométricos a nivel de participante.
+Data Structure
+
+The analyses rely on the following datasets:
+	•	trials_master: Trial-level data from the emotion recognition task, including:
+	•	participant identifier
+	•	target emotion
+	•	response accuracy (binary)
+	•	reaction time (ms)
+	•	panas_master: Item-level PANAS responses, including:
+	•	participant identifier
+	•	PANAS item
+	•	response value
+	•	demographic variables (age, gender, academic group)
+
+These datasets are merged into a unified trial-level dataset (trials_mixed) used for inferential modeling.
 
 ⸻
 
-Análisis estadísticos
+Statistical Analyses
 
-Análisis descriptivos
-	•	Exactitud y tiempo de reacción por emoción y grupo académico.
-	•	Intervalos de confianza del 95% estimados mediante bootstrap BCa a nivel de participante.
+Accuracy
+	•	Accuracy was analyzed at the trial level using generalized linear mixed-effects models with a binomial (logit) link.
+	•	Fixed effects included target emotion, academic group (first vs. fourth year), age, gender, positive affect (PA), and negative affect (NA).
+	•	Random intercepts were specified for participants to account for within-subject dependence.
+	•	When the interaction between emotion and academic group was significant, post hoc comparisons were conducted separately by group using odds ratios with Holm correction.
 
-Asociación entre estado afectivo y desempeño
-	•	Correlaciones de Spearman entre PA, NA y:
-	•	Exactitud media.
-	•	Tiempo de reacción medio (ensayos correctos).
-
-Modelos mixtos
-
-Exactitud
-	•	Modelo logístico mixto a nivel de ensayo.
-	•	Efectos fijos:
-	•	Emoción objetivo.
-	•	Grupo académico.
-	•	Edad, género, PA y NA.
-	•	Intercepto aleatorio por participante.
-	•	Evaluación de interacción emoción × grupo académico mediante comparación de modelos anidados.
-
-Tiempo de reacción
-	•	Modelo lineal mixto sobre RT transformado logarítmicamente.
-	•	Análisis restringido a ensayos correctos.
-	•	Mismos predictores y estructura aleatoria que el modelo de exactitud.
-	•	Comparación entre modelo con y sin interacción emoción × grupo.
-
-Comparaciones post hoc
-	•	Exactitud: contrastes sobre odds ratios con corrección de Holm.
-	•	Tiempo de reacción: contrastes sobre medias marginales estimadas (escala log-RT), con corrección de Holm.
-	•	Resultados sintetizados mediante sistema de letras para facilitar la interpretación.
+Reaction Time
+	•	Reaction time analyses were restricted to correct trials.
+	•	Reaction times were log-transformed to address positive skewness.
+	•	Linear mixed-effects models were fitted with the same fixed and random effects structure as the accuracy models.
+	•	Interaction effects between emotion and academic group were tested via model comparison.
+	•	Post hoc comparisons between emotions were conducted using estimated marginal means with Holm-adjusted p-values.
 
 ⸻
 
-Reproducibilidad
-	•	El código está diseñado para ejecutarse de forma secuencial y reproducible.
-	•	Se fijan semillas cuando corresponde (bootstrap).
-	•	Todas las decisiones analíticas reflejan exactamente lo reportado en el manuscrito.
-	•	No se incluyen análisis exploratorios no reportados.
+Bootstrap Confidence Intervals
+
+Descriptive figures for accuracy and reaction time include bias-corrected and accelerated (BCa) bootstrap confidence intervals, computed at the participant level to respect the repeated-measures structure of the data.
+
+Bootstrap procedures were implemented using the boot package with 2,000 resamples.
 
 ⸻
 
-Requisitos
+Software and Packages
 
-Paquetes principales utilizados:
-	•	tidyverse
-	•	lme4
-	•	emmeans
-	•	boot
-	•	psych
-	•	ggplot2
-
-Versión de R recomendada: ≥ 4.2
+Analyses were conducted in R using the following main packages:
+	•	lme4 – mixed-effects modeling
+	•	emmeans – estimated marginal means and post hoc contrasts
+	•	boot – BCa bootstrap confidence intervals
+	•	ggplot2 – data visualization
+	•	dplyr, tidyr, stringr – data manipulation
 
 ⸻
 
-Nota final
+Reproducibility
 
-Este repositorio tiene como objetivo garantizar transparencia, reproducibilidad y trazabilidad analítica del estudio. Cualquier modificación al código debería reflejarse explícitamente en los resultados y en el manuscrito asociado.
+All code is organized sequentially and annotated to allow full reproducibility of the analyses reported in the manuscript, from raw data preparation to final statistical models and figures.
+
+⸻
+
+Author
+
+Luciano Silva Aguayo
+Doctoral Program in Education
+University of Concepción, Chile
